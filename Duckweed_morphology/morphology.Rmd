@@ -1,0 +1,112 @@
+---
+title: "Duckweed morphology analysis"
+---
+
+## Introduction
+
+This document analyses duckweed morphology (area per frond and dry weight per frond) under different treatments.
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(readr)
+library(car)
+library(lme4)
+library(ggpubr)
+```
+
+### Data import
+
+```{r data-import, message=FALSE, warning=FALSE}
+df <- read.table("data_morphology.txt", sep = "\t", header = TRUE) %>%
+  mutate(
+    area_frond   = parse_number(as.character(area_frond)),
+    weight_frond = parse_number(as.character(weight_frond))
+  )
+```
+
+### Plot settings
+
+```{r plot-settings, message=FALSE, warning=FALSE}
+base_theme <- theme_classic(base_size = 14) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title.x = element_text(color = "black", size = 14),
+    axis.title.y = element_text(color = "black", size = 14),
+    axis.text.x  = element_text(color = "black", size = 14),
+    axis.text.y  = element_text(color = "black", size = 14),
+    legend.position = "none",
+    plot.tag = element_text(face = "bold")
+  )
+
+# Color scale
+treat_colors <- scale_fill_manual(
+  values = c(control = "#0072B2", heated = "#D55E00")
+)
+```
+
+### Dry weight per frond
+
+```{r panel-a-weight, message=FALSE, warning=FALSE, fig.width=3.6, fig.height=4}
+df_wt <- df %>% filter(!is.na(weight_frond))
+
+px2 <- ggplot(df_wt, aes(x = treatment, y = weight_frond, fill = treatment)) +
+  geom_boxplot(
+    color = "black",
+    linewidth = 0.8,
+    outlier.color = "black"
+  ) +
+  treat_colors +
+  labs(
+    x = "Treatment",
+    y = "Dry weight (mg)"
+  ) +
+  base_theme
+
+px2
+```
+
+#### Statistical analysis - Dry weight
+
+```{r stats-weight, message=FALSE, warning=FALSE}
+model_wt <- lmer(weight_frond ~ treatment + (1 | block), data = df_wt)
+Anova(model_wt, test = "F")
+summary(model_wt)
+```
+
+### Area per frond
+
+```{r panel-b-area, message=FALSE, warning=FALSE, fig.width=3.6, fig.height=4}
+df_area <- df %>% filter(!is.na(area_frond))
+
+px1 <- ggplot(df_area, aes(x = treatment, y = area_frond, fill = treatment)) +
+  geom_boxplot(
+    color = "black",
+    linewidth = 0.8,
+    outlier.color = "black"
+  ) +
+  treat_colors +
+  labs(
+    x = "Treatment",
+    y = "Area per frond (mm²)"
+  ) +
+  base_theme
+
+px1
+```
+
+#### Statistical analysis - Weight and Area 
+
+```{r stats-area, message=FALSE, warning=FALSE}
+model_area <- lmer(area_frond ~ treatment + (1 | block), data = df_area)
+Anova(model_area, test = "F")
+summary(model_area)
+
+model_wt <- lmer(weight_frond ~ treatment + (1 | block), data = df_wt)
+Anova(model_wt, test = "F")
+summary(model_wt)
+
+```
