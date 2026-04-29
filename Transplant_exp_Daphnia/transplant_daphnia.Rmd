@@ -1,0 +1,312 @@
+---
+title: "Daphnia reciprocal transplant experiment"
+---
+
+## Introduction
+
+This document analyses the Daphnia reciprocal transplant experiment, examining relative growth rates and variance partitioning across evolutionary origin, water source, and host environment.
+
+**Note:** This R Markdown document generates:
+Mean relative growth rates across treatments
+Variance partitioning with bootstrap 95% confidence intervals
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(plotrix)
+library(readxl)
+library(patchwork)
+library(parallel)
+library(lmerTest)
+```
+
+### Data import
+
+```{r data-import, message=FALSE, warning=FALSE}
+df <- read.table("data_daphnia.txt", sep = "\t", header = TRUE)
+```
+
+### Data preparation
+
+```{r data-preparation, message=FALSE, warning=FALSE}
+df$daphnia_origin <- factor(df$daphnia_origin, levels = c("control", "heated"))
+df$pond_host      <- factor(df$pond_host,      levels = c("control", "heated"))
+df$water_origin   <- factor(df$water_origin,   levels = c("control", "heated"))
+
+df$block          <- factor(df$block)
+df$pond_recipient <- factor(df$pond_recipient)
+
+options(contrasts = c("contr.sum", "contr.poly"))
+
+df$rel.count <- (log(df$daphnia_end + 1) - log(df$daphnia_start + 1)) / 14
+```
+
+### Summary statistics
+
+```{r summary-statistics, message=FALSE, warning=FALSE}
+mdata.plot <- df %>%
+  group_by(daphnia_origin, pond_host, water_origin) %>%
+  summarise(
+    fitness_av = mean(rel.count, na.rm = TRUE),
+    fitness_se = std.error(rel.count, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+### Mean relative growth rates
+
+```{r panel-a-means, message=FALSE, warning=FALSE, fig.width=5.2, fig.height=4}
+px_means <- ggplot(
+  mdata.plot,
+  aes(
+    x = pond_host, y = fitness_av,
+    color = daphnia_origin,
+    shape = water_origin,
+    linetype = water_origin,
+    group = interaction(daphnia_origin, water_origin)
+  )
+) +
+  geom_errorbar(
+    aes(ymin = fitness_av - fitness_se, ymax = fitness_av + fitness_se),
+    width = 0.18, linewidth = 0.7,
+    position = position_dodge(0.28)
+  ) +
+  geom_point(size = 3, position = position_dodge(0.28)) +
+  geom_line(linewidth = 1, position = position_dodge(0.28)) +
+  scale_color_manual(
+    name = "Origin treatment",
+    values = c("control" = "#0072B2", "heated" = "#D55E00"),
+    labels = c("Control origin", "Heated origin")
+  ) +
+  scale_shape_manual(
+    name = "Water source",
+    values = c(control = 16, heated = 17),
+    labels = c("Control water", "Heated water")
+  ) +
+  scale_linetype_manual(
+    name = "Water source",
+    values = c(control = "solid", heated = "dashed"),
+    labels = c("Control water", "Heated water")
+  ) +
+  labs(
+    x = "Host environment",
+    y = "Relative growth rate (day\u207B\u00B9)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "top"
+  )
+
+print(px_means)
+```
+
+### Mixed model and Type III ANOVA
+
+```{r mixed-model, message=FALSE, warning=FALSE}
+model <- lmerTest::lmer(rel.count ~ daphnia_origin * pond_host * water_origin + (1 | pond_recipient) + (1 | block), data = df, REML = TRUE)
+
+anova_type3 <- anova(model, type = 3)
+print(anova_type3)
+
+anova_df <- as.data.frame(anova_type3)
+write.table(anova_df, "anova_typeIII_lmerTest.txt", sep = "\t", quote = FALSE)
+
+if (!("Sum Sq" %in% colnames(anova_df))) {
+  stop("No 'Sum Sq' column found in lmerTest::anova output.")
+}
+```
+
+### Variance partitioning (Type III SS proportions)
+
+```{r variance-partitioning, message=FALSE, warning=FALSE}
+label_terms <- function(term_vec) {
+  dplyr::recode(
+    term_vec,
+    "daphnia_origin" = "Evolution (Origin)",
+    "water_origin" = "Water-mediated environment",
+    "pond_host" = "Environment (Host)",
+    "daphnia_origin:water_origin" = "Evo × Water",
+    "pond_host:water_origin" = "Env × Water",
+    "daphnia_origin:pond_host" = "Evo × Env",
+    "daphnia_origin:pond_host:water_origin" = "Evo × Env × Water",
+    .default = term_vec
+  )
+}
+desired_order <- c(
+  "Water-mediated environment",
+  "Evolution (Origin)",
+  "Environment (Host)",
+  "Evo × Water",
+  "Env × Water",
+  "Evo × Env",
+  "Evo × Env × Water"
+)
+
+vp <- data.frame(
+  term = rownames(anova_df),
+  sumsq = anova_df$`Sum Sq`,
+  stringsAsFactors = FALSE
+) %>%
+  filter(term != "(Intercept)") %>%
+  filter(!is.na(sumsq)) %>%
+  mutate(
+    proportion = sumsq / sum(sumsq),
+    term_label = label_terms(term),
+    term_label = factor(term_label, levels = desired_order)
+  ) %>%
+  arrange(term_label)
+
+print(vp)
+write.table(vp, "variance_partitioning_typeIII_SS.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+### Bootstrap confidence intervals
+
+```{r bootstrap-ci, message=FALSE, warning=FALSE}
+DO_BOOT <- TRUE
+
+if (DO_BOOT) {
+  
+  ss_prop_from_anova <- function(anova_df_in) {
+    data.frame(
+      term = rownames(anova_df_in),
+      sumsq = anova_df_in$`Sum Sq`,
+      stringsAsFactors = FALSE
+    ) %>%
+      dplyr::filter(term != "(Intercept)") %>%
+      dplyr::filter(!is.na(sumsq)) %>%
+      dplyr::mutate(prop = sumsq / sum(sumsq))
+  }
+  
+  vp0 <- ss_prop_from_anova(anova_df)
+  
+  set.seed(123)
+  B <- 300
+  
+  pond_levels <- levels(df$pond_recipient)
+  n_pond <- length(pond_levels)
+  
+  boot_once <- function(b) {
+    sampled_ponds <- sample(pond_levels, size = n_pond, replace = TRUE)
+    
+    boot_list <- lapply(seq_along(sampled_ponds), function(i) {
+      sub <- df[df$pond_recipient == sampled_ponds[i], , drop = FALSE]
+      sub$pond_recipient_boot <- factor(paste0("pondDraw", i))
+      sub
+    })
+    boot_df <- do.call(rbind, boot_list)
+    
+    fit <- tryCatch(
+      lmerTest::lmer(
+        rel.count ~ daphnia_origin * pond_host * water_origin +
+          (1 | pond_recipient_boot) + (1 | block),
+        data = boot_df,
+        REML = TRUE,
+        control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(fit)) return(NULL)
+    
+    an <- tryCatch(anova(fit, type = 3), error = function(e) NULL)
+    if (is.null(an)) return(NULL)
+    
+    an_df_b <- as.data.frame(an)
+    if (!("Sum Sq" %in% colnames(an_df_b))) return(NULL)
+    
+    vp_b <- ss_prop_from_anova(an_df_b)
+    setNames(vp_b$prop, vp_b$term)
+  }
+  
+  message("Running bootstrap ...")
+  boot_res <- lapply(1:B, boot_once)
+  boot_res <- boot_res[!vapply(boot_res, is.null, logical(1))]
+  message("Successful bootstrap fits: ", length(boot_res), " / ", B)
+  
+  if (length(boot_res) < 50) stop("Too many bootstrap failures.")
+  
+  # list -> matrix aligned by term
+  all_terms <- sort(unique(unlist(lapply(boot_res, names))))
+  boot_mat <- matrix(NA_real_, nrow = length(boot_res), ncol = length(all_terms),
+                     dimnames = list(NULL, all_terms))
+  for (i in seq_along(boot_res)) boot_mat[i, names(boot_res[[i]])] <- boot_res[[i]]
+  
+  boot_mean <- apply(boot_mat, 2, function(x) mean(x, na.rm = TRUE))
+  
+  # build CI table
+  vp_ci <- data.frame(
+    term = colnames(boot_mat),
+    estimate = vp0$prop[match(colnames(boot_mat), vp0$term)],
+    mean_boot = boot_mean,
+    CI_lower = apply(boot_mat, 2, function(x) quantile(x, 0.025, na.rm = TRUE)),
+    CI_upper = apply(boot_mat, 2, function(x) quantile(x, 0.975, na.rm = TRUE)),
+    stringsAsFactors = FALSE
+  )
+  
+  vp_ci$estimate[is.na(vp_ci$estimate)] <- vp_ci$mean_boot[is.na(vp_ci$estimate)]
+  
+  write.table(vp_ci, "variance_partitioning_typeIII_SS_95CI.txt",
+              sep = "\t", quote = FALSE, row.names = FALSE)
+}
+```
+
+### Variance partitioning plot
+
+```{r panel-b-variance, message=FALSE, warning=FALSE, fig.width=5.2, fig.height=4.2}
+if (DO_BOOT) {
+  
+  vp_ci$term_label <- dplyr::recode(
+    vp_ci$term,
+    "daphnia_origin" = "Evolution",
+    "water_origin" = "Water",
+    "pond_host" = "Environment",
+    "daphnia_origin:water_origin" = "Evo × Water",
+    "pond_host:water_origin" = "Env × Water",
+    "daphnia_origin:pond_host" = "Evo × Env",
+    "daphnia_origin:pond_host:water_origin" = "Evo × Env × Water",
+    .default = vp_ci$term
+  )
+  
+  wanted_levels <- c(
+    "Water", "Evolution", "Environment",
+    "Evo × Water", "Env × Water", "Evo × Env", "Evo × Env × Water"
+  )
+  
+  vp_ci <- vp_ci %>% dplyr::filter(term_label %in% wanted_levels)
+  vp_ci$term_label <- factor(vp_ci$term_label, levels = wanted_levels)
+  
+  vp_ci$color_group <- dplyr::case_when(
+    vp_ci$term_label == "Evolution"   ~ "Evolution",
+    vp_ci$term_label == "Water"       ~ "Water",
+    vp_ci$term_label == "Environment" ~ "Environment",
+    TRUE                              ~ "Interaction"
+  )
+  
+  eco_palette <- c(
+    "Evolution"   = "#E69F00", 
+    "Water"       = "#0F766E",
+    "Environment" = "#6B8E23",
+    "Interaction" = "#D9D9D9"
+  )
+  
+  px_vp_ci <- ggplot(vp_ci, aes(x = term_label, y = estimate, fill = color_group)) +
+    geom_col(width = 0.75, color = "grey20", linewidth = 0.4) +
+    geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.18, linewidth = 0.8) +
+    scale_fill_manual(values = eco_palette) +
+    theme_classic(base_size = 16) +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 25, hjust = 1),
+      axis.title.y = element_text(face = "bold")
+    ) +
+    labs(x = NULL, y = "Contribution to variance")
+  
+  print(px_vp_ci)
+
+}
+```
