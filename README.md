@@ -1,0 +1,8 @@
+# Modest warming amplifies natural heatwave impacts and reorganizes freshwater communities
+
+**Authors:** Sara Nouere, Martin Schäfer, Guangqiong Li, Martin Lohr, and Shuqing Xu
+
+---
+
+## Abstract
+Climate warming reshapes ecological communities by altering both species performance and the trophic interactions that regulate community structure. Heatwaves can intensify these effects and make prediction of warming responses difficult, yet replicated experiments that capture real extreme events in whole communities remain rare. Here, we developed a scalable, solar-powered warming system for 32 outdoor freshwater mesocosms containing a multitrophic community of the floating macrophyte Spirodela polyrhiza, the waterlily aphid (Rhopalosiphum nymphaeae), the grazing snail Lymnaea stagnalis, phytoplankton, and the zooplankton grazer Daphnia magna. During a natural heatwave in early July 2025, warmed mesocosms reached higher temperature maxima and showed significantly lower numbers of L. stagnalis. This reduced snail abundance was associated with increased cover of S. polyrhiza, higher waterlily aphid population size, less phytoplankton (quantified as chlorophyll-a level), and reduced Daphnia abundance, indicating reorganization across trophic levels. Complementary assays showed that heatwave temperatures increased duckweed growth while reducing snail feeding and survival, identifying direct and indirect pathways by which warming altered community dynamics. Together, these results show that modest warming can amplify the ecological impacts of short natural heatwaves and reorganize freshwater communities.
