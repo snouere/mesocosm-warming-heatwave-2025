@@ -1,0 +1,108 @@
+---
+title: "Algae concentrations"
+---
+
+## Introduction
+This document analyses algae concentrations under different treatments. 
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(lme4)
+library(car)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+```
+
+### Data import and cleaning
+
+```{r data-import, message=FALSE, warning=FALSE}
+
+df_algae <- read.table("data_algae.txt", sep = "\t", header = TRUE)
+
+df_algae <- df_algae %>%
+  mutate(
+    ID = as.character(ID),
+    pond = as.character(pond),
+    block = as.character(block),
+    date = as.character(date),
+    date = str_replace_all(date, "\\.\\.+", "."),
+    date = str_trim(date),
+    date = as.Date(date, format = "%d.%m.%Y"),
+    timepoint = as.numeric(timepoint),
+    treatment = tolower(str_trim(as.character(treatment))),
+    chla = as.numeric(chla),
+    # factors
+    treatment = factor(treatment, levels = c("control", "heated")),
+    pond = factor(pond),
+    block = factor(block)
+  )
+```
+
+### Plot settings
+
+```{r plot-settings, message=FALSE, warning=FALSE}
+my_cols <- c("control" = "#0072B2", "heated" = "#D55E00")
+
+my_theme <- theme_classic(base_size = 15) +
+  theme(
+    axis.title = element_text(size = 16, color = "black"),
+    axis.text = element_text(size = 13, color = "black"),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.position = "right",
+    axis.line = element_line(color = "black", linewidth = 0.8)
+  )
+```
+
+### Chlorophyll-a dynamics
+
+```{r chla-dynamics, message=FALSE, warning=FALSE}
+df_chla_summary <- df_algae %>%
+  group_by(timepoint, treatment) %>%
+  summarise(
+    mean_chla = mean(chla, na.rm = TRUE),
+    se_chla = sd(chla, na.rm = TRUE) / sqrt(sum(!is.na(chla))),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(treatment), !is.na(mean_chla)) %>%
+  mutate(
+    timepoint_f = factor(timepoint, levels = sort(unique(timepoint)))
+  )
+p_chla <- ggplot(
+  df_chla_summary,
+  aes(x = timepoint_f, y = mean_chla, colour = treatment, group = treatment)
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 3) +
+  geom_errorbar(
+    aes(ymin = mean_chla - se_chla, ymax = mean_chla + se_chla),
+    width = 0
+  ) +
+  scale_y_continuous(breaks = seq(0, 20, 2)) +
+  coord_cartesian(ylim = c(0, 20)) +
+  scale_colour_manual(values = my_cols) +
+  labs(
+    x = "Time (weeks)",
+    y = "Chlorophyll-a (nmol/L)"
+  ) +
+  my_theme +
+  theme(legend.position = "none")
+
+p_chla
+```
+
+### Statistical analysis
+
+```{r statistical-analysis, message=FALSE, warning=FALSE}
+df_model <- df_algae %>%
+  filter(!timepoint %in% c(0, 1))
+
+# Chl-a model
+m_chla <- lmer(chla ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_model)
+Anova(m_chla, test = "F")
+summary(m_chla)
+```
