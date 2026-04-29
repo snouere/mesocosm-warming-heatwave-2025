@@ -1,0 +1,165 @@
+---
+title: "Duckweed coverage and snail abundance analysis"
+---
+
+## Introduction
+
+This document analyses duckweed coverage and snail abundance under different treatments.
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(plotrix)
+library(lme4)
+library(car)
+library(readr)
+library(ggpubr)
+library(readxl)
+```
+
+### Data import
+
+```{r data-import, message=FALSE, warning=FALSE}
+df <- read.table("data_coverage_snail.txt", sep = "\t", header = TRUE)
+```
+
+### Plot settings
+
+```{r plot-settings, message=FALSE, warning=FALSE}
+all_tp <- sort(unique(df$timepoint))
+
+cols <- scale_color_manual(
+  name = "Treatment",
+  values = c("control" = "#0072B2", "heated" = "#D55E00"),
+  labels = c("Control", "Heated")
+)
+
+pos <- position_dodge(0.3)
+
+base_theme <- theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold", size = 14),
+    axis.text  = element_text(size = 14),
+    legend.position = "top",
+    legend.box = "vertical",
+    legend.title = element_text(face = "bold", size = 14),
+    legend.text  = element_text(size = 14),
+    legend.margin = margin(b = -10)
+  )
+```
+
+### Duckweed coverage analysis
+
+```{r coverage-analysis, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+# Summary statistics
+mdata.plot <- df %>%
+  group_by(timepoint, treatment) %>%
+  summarise(
+    coverage_av = mean(duckweed_coverage, na.rm = TRUE),
+    coverage_se = plotrix::std.error(duckweed_coverage, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(timepoint_f = factor(timepoint, levels = all_tp))
+
+# Coverage plot
+px_coverage <- ggplot(mdata.plot, aes(
+  x = timepoint_f,
+  y = coverage_av,
+  color = treatment,
+  group = treatment
+)) +
+  geom_errorbar(
+    aes(ymin = coverage_av - coverage_se, ymax = coverage_av + coverage_se),
+    width = 0, linewidth = 0.8,
+    position = pos,
+    na.rm = TRUE
+  ) +
+  geom_point(size = 3, position = pos, na.rm = TRUE) +
+  geom_line(linewidth = 1, position = pos, na.rm = TRUE) +
+  cols +
+  scale_x_discrete(name = "Weeks", drop = FALSE) +
+  labs(y = "Duckweed coverage (%)") +
+  base_theme
+
+px_coverage
+```
+
+### Coverage statistics
+
+```{r coverage-statistics, message=FALSE, warning=FALSE}
+df_model <- df %>%
+  filter(!timepoint %in% c(0, 1))
+
+model <- lmer(duckweed_coverage ~ treatment * timepoint + (1|block) + (1|pond), data = df_model)
+Anova(model, test = "F")
+summary(model)
+```
+
+### Snail abundance analysis
+
+```{r snail-analysis, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+# Summary statistics
+mdata.snail.time <- df %>%
+  mutate(snail_num = parse_number(as.character(snail), locale = locale(decimal_mark = ","))) %>%
+  filter(!is.na(timepoint), !is.na(treatment)) %>%
+  group_by(timepoint, treatment) %>%
+  summarise(
+    n = sum(!is.na(snail_num)),
+    snail_av = ifelse(n > 0, mean(snail_num, na.rm = TRUE), NA_real_),
+    snail_se = ifelse(n > 1, plotrix::std.error(snail_num, na.rm = TRUE), NA_real_),
+    .groups = "drop"
+  ) %>%
+  mutate(timepoint_f = factor(timepoint, levels = all_tp))
+
+# Snail plot
+px_snail_time <- ggplot(mdata.snail.time, aes(
+  x = timepoint_f,
+  y = snail_av,
+  color = treatment,
+  group = treatment
+)) +
+  geom_errorbar(
+    aes(ymin = snail_av - snail_se, ymax = snail_av + snail_se),
+    width = 0, linewidth = 0.8,
+    position = pos,
+    na.rm = TRUE
+  ) +
+  geom_point(size = 3, position = pos, na.rm = TRUE) +
+  geom_line(linewidth = 1, position = pos, na.rm = TRUE) +
+  cols +
+  scale_x_discrete(name = "Weeks", drop = FALSE) +
+  labs(y = "Snail abundance") +
+  base_theme
+
+px_snail_time
+```
+
+### Snail statistics
+
+```{r snail-statistics, message=FALSE, warning=FALSE}
+df_snail_model <- df %>%
+  mutate(snail_num = parse_number(as.character(snail), locale = locale(decimal_mark = ","))) %>%
+  filter(
+    !timepoint %in% c(0,1),
+    !is.na(snail_num)
+  )
+
+model_snail <- lmer(
+  snail_num ~ treatment * timepoint + (1|block) + (1|pond),
+  data = df_snail_model
+)
+
+Anova(model_snail, test = "F")
+summary(model_snail)
+```
+
+### Correlation analysis
+
+```{r correlation-analysis, message=FALSE, warning=FALSE}
+# Correlation between duckweed and snails
+model_corr <- lmer(duckweed_coverage ~ snail_num + (1|block) + (1|pond), data = df_snail_model)
+Anova(model_corr, test = "F")
+summary(model_corr)
+```
