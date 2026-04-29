@@ -1,0 +1,270 @@
+---
+title: "Indoor experiment: Growth, herbivory, and snail mortality"
+---
+
+## Introduction
+
+This document analyses the indoor experiment data examining duckweed growth, herbivory rates, and snail mortality across different temperatures.
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(lme4)
+library(car)
+```
+
+### Data import and preparation
+
+```{r data-import, message=FALSE, warning=FALSE}
+dat <- read.table("sn_duck_ind.txt", sep = "\t", header = TRUE)
+
+dat <- dat %>%
+  mutate(
+    temperature = as.numeric(temperature),
+    frond_change_day = fronds_end - fronds_start
+  )
+```
+
+### Calculate control baseline and herbivory metrics
+
+```{r calculate-metrics, message=FALSE, warning=FALSE}
+control_baseline <- dat %>%
+  filter(treatment == "control") %>%
+  group_by(round, temperature) %>%
+  summarise(
+    control_mean_change = mean(frond_change_day, na.rm = TRUE),
+    .groups = "drop"
+  )
+dat2 <- dat %>%
+  left_join(control_baseline, by = c("round", "temperature")) %>%
+  mutate(
+    corrected_herbivory = if_else(
+      treatment == "herbivory",
+      control_mean_change - frond_change_day,
+      NA_real_
+    ),
+    snail_effective = (snail_start + snail_end) / 2,
+    corrected_herbivory_per_snail = if_else(
+      treatment == "herbivory",
+      corrected_herbivory / snail_effective,
+      NA_real_
+    )
+  )
+
+temps <- sort(unique(dat2$temperature))
+```
+
+### Summary statistics
+
+#### Herbivory summary
+
+```{r herbivory-summary, message=FALSE, warning=FALSE}
+herb <- dat2 %>% filter(treatment == "herbivory")
+
+round_means_snail <- herb %>%
+  group_by(round, temperature) %>%
+  summarise(
+    mean_corr_snail = mean(corrected_herbivory_per_snail, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+temp_summary_snail <- round_means_snail %>%
+  group_by(temperature) %>%
+  summarise(
+    mean = mean(mean_corr_snail, na.rm = TRUE),
+    se   = sd(mean_corr_snail, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(series = "Herbivory")
+```
+
+#### Growth summary
+
+```{r growth-summary, message=FALSE, warning=FALSE}
+# Growth (control)
+growth_dat <- dat2 %>%
+  filter(treatment == "control") %>%
+  mutate(
+    growth_rate    = fronds_end - fronds_start,     # fronds per day
+    temperature    = as.numeric(temperature),       # for plotting on x-axis
+    temperature_f  = factor(temperature, levels = sort(unique(temperature)))  # for modeling
+  )
+
+# Mean growth per round × temperature 
+round_growth <- growth_dat %>%
+  group_by(round, temperature) %>%
+  summarise(
+    mean_growth = mean(growth_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Mean ± SE across rounds (one value per temperature)
+temp_growth_summary <- round_growth %>%
+  group_by(temperature) %>%
+  summarise(
+    mean = mean(mean_growth, na.rm = TRUE),
+    se   = sd(mean_growth, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(series = "Growth")
+```
+
+#### Mortality summary
+
+```{r mortality-summary, message=FALSE, warning=FALSE}
+# Mortality (bars): mean across rounds
+mortality_by_round <- herb %>%
+  group_by(round, temperature) %>%
+  summarise(
+    deaths         = sum(snail_start - snail_end, na.rm = TRUE),
+    total_snails   = sum(snail_start, na.rm = TRUE),
+    mortality_rate = deaths / total_snails,
+    .groups = "drop"
+  )
+
+mortality_mean <- mortality_by_round %>%
+  group_by(temperature) %>%
+  summarise(
+    mean_mortality = mean(mortality_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+### Plot settings
+
+```{r plot-settings, message=FALSE, warning=FALSE}
+growth_color <- "#006D6F"   # deep teal
+herb_color   <- "#B03A2E"   # warm brick
+mort_fill    <- "grey80"
+mort_edge    <- "grey30"
+
+axis_lw  <- 0.55
+trend_lw <- 1.20
+err_lw   <- 0.75
+
+base_theme <- theme_classic(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = axis_lw, color = "black"),
+    axis.ticks = element_line(linewidth = axis_lw, color = "black"),
+    axis.ticks.length = unit(2.2, "mm"),
+    legend.title = element_blank(),
+    legend.key = element_rect(fill = "white", color = NA)
+  )
+```
+
+### Growth and herbivory rates
+
+```{r panel-a, message=FALSE, warning=FALSE, fig.width=3.4, fig.height=4}
+y_breaks <- seq(0, 30, by = 5)
+y_minor  <- seq(0, 30, by = 2.5)
+
+p_top <- ggplot() +
+  # faint round points (behind)
+  geom_point(
+    data = round_df,
+    aes(x = temperature, y = value, color = series),
+    alpha = 0.18,
+    size = 1.6,
+    shape = 16,
+    show.legend = FALSE
+  ) +
+  # mean ± SE
+  geom_errorbar(
+    data = means_df,
+    aes(x = temperature, ymin = mean - se, ymax = mean + se, color = series),
+    width = 0,
+    linewidth = err_lw
+  ) +
+  geom_line(
+    data = means_df,
+    aes(x = temperature, y = mean, color = series, group = series),
+    linewidth = trend_lw
+  ) +
+  geom_point(
+    data = means_df,
+    aes(x = temperature, y = mean, color = series),
+    size = 3.7
+  ) +
+  scale_color_manual(values = c("Growth" = growth_color, "Herbivory" = herb_color)) +
+  scale_x_continuous(breaks = temps) +
+  coord_cartesian(ylim = c(2.5, 28.5)) +
+  scale_y_continuous(
+    breaks = y_breaks,
+    minor_breaks = y_minor,
+    expand = expansion(mult = c(0.02, 0.04))
+  ) +
+  labs(
+    x = NULL,
+    y = expression("Rate (fronds" %.% "day"^{-1}*")")
+  ) +
+  base_theme +
+  theme(
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.line.x  = element_blank(),
+    
+    legend.position = c(0.22, 0.86),
+    legend.justification = c(0, 1),
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.text = element_text(size = 10),
+    guides(color = guide_legend(override.aes = list(size = 2.8))),
+    
+    plot.title = element_text(face = "bold", size = 14, hjust = 0),
+    plot.margin = margin(6, 10, 0, 10)
+  ) +
+  labs(title = "A")
+
+p_top
+```
+
+### Snail mortality
+
+```{r panel-b, message=FALSE, warning=FALSE, fig.width=3.4, fig.height=2.2}
+p_bottom <- ggplot(mortality_mean, aes(x = temperature, y = mean_mortality)) +
+  geom_col(
+    fill = mort_fill,
+    color = mort_edge,
+    linewidth = 0.5,
+    width = 0.90
+  ) +
+  scale_x_continuous(breaks = temps) +
+  coord_cartesian(ylim = c(0, 0.10)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  labs(
+    x = expression("Temperature ("*degree*"C)"),
+    y = "Snail mortality (proportion dead)"
+  ) +
+  base_theme +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0),
+    plot.margin = margin(0, 10, 6, 10)
+  ) 
+p_bottom
+```
+
+### Statistical analyses
+
+#### Herbivory analysis
+
+```{r stats-herbivory, message=FALSE, warning=FALSE}
+herb_model <- dat2 %>% filter(treatment == "herbivory")
+herb_model$temperature <- factor(herb_model$temperature)
+
+# Mixed model
+m1 <- lmer(corrected_herbivory_per_snail ~ temperature + (1 | round), data = herb_model)
+Anova(m1, test = "F")
+summary(m1)
+```
+
+#### Growth analysis
+
+```{r stats-growth, message=FALSE, warning=FALSE}
+# Mixed model for growth
+m2 <- lmer(growth_rate ~ temperature_f + (1 | round), data = growth_dat)
+Anova(m2, test = "F")
+summary(m2)
+```
