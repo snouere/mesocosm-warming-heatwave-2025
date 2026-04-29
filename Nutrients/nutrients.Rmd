@@ -1,0 +1,244 @@
+---
+title: "Nutrients analyses"
+---
+
+## Introduction
+
+This document analyses water quality parameters including nutrients (chloride, nitrate, phosphate, sulfate), dissolved oxygen, conductivity, pH, and water temperature under different treatments.
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(plotrix)
+library(stringr)
+library(readr)
+library(readxl)
+library(patchwork)
+library(lme4)
+library(car)
+library(tidyr)
+```
+
+### Data import
+
+```{r data-import, message=FALSE, warning=FALSE}
+df <- read.table("nutrients.txt", sep = "\t", header = TRUE)
+```
+
+### Data cleaning
+
+```{r data-cleaning, message=FALSE, warning=FALSE}
+num_cols <- c("chloride","nitrate","phosphate","sulfate","fluoride","bromide",
+              "O2_pourcentage","O2_mg","conductivity","pH","water_temperature")
+
+df2 <- df %>%
+  mutate(across(all_of(num_cols), ~{
+    x <- as.character(.x)
+    x <- str_trim(x)
+    x <- na_if(x, "")
+    x <- na_if(tolower(x), "invalid")
+    x <- str_replace_all(x, ",", ".")            
+    x <- str_remove_all(x, "[^0-9\\.-]")        
+    suppressWarnings(as.numeric(x))
+  })) %>%
+  mutate(
+    timepoint = as.numeric(timepoint),
+    treatment = factor(treatment, levels = c("control", "heated"))
+  )
+
+# Optional check
+df2 %>% count(timepoint, treatment) %>% arrange(timepoint, treatment)
+```
+
+### Summary statistics
+
+```{r summary-statistics, message=FALSE, warning=FALSE}
+mdata.plot <- df2 %>%
+  group_by(timepoint, treatment) %>%
+  summarise(
+    chloride_av  = mean(chloride, na.rm = TRUE),
+    chloride_se  = plotrix::std.error(chloride, na.rm = TRUE),
+    
+    nitrate_av   = mean(nitrate, na.rm = TRUE),
+    nitrate_se   = plotrix::std.error(nitrate, na.rm = TRUE),
+    
+    phosphate_av = mean(phosphate, na.rm = TRUE),
+    phosphate_se = plotrix::std.error(phosphate, na.rm = TRUE),
+    
+    sulfate_av   = mean(sulfate, na.rm = TRUE),
+    sulfate_se   = plotrix::std.error(sulfate, na.rm = TRUE),
+    
+    fluoride_av  = mean(fluoride, na.rm = TRUE),
+    fluoride_se  = plotrix::std.error(fluoride, na.rm = TRUE),
+    
+    bromide_av   = mean(bromide, na.rm = TRUE),
+    bromide_se   = plotrix::std.error(bromide, na.rm = TRUE),
+    
+    O2_pourcentage_av = mean(O2_pourcentage, na.rm = TRUE),
+    O2_pourcentage_se = plotrix::std.error(O2_pourcentage, na.rm = TRUE),
+    
+    O2_mg_av     = mean(O2_mg, na.rm = TRUE),
+    O2_mg_se     = plotrix::std.error(O2_mg, na.rm = TRUE),
+    
+    conductivity_av = mean(conductivity, na.rm = TRUE),
+    conductivity_se = plotrix::std.error(conductivity, na.rm = TRUE),
+    
+    pH_av        = mean(pH, na.rm = TRUE),
+    pH_se        = plotrix::std.error(pH, na.rm = TRUE),
+    
+    water_temp_av = mean(water_temperature, na.rm = TRUE),
+    water_temp_se = plotrix::std.error(water_temperature, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+tp_levels <- sort(unique(df2$timepoint))
+mdata.plot <- mdata.plot %>%
+  mutate(time_f = factor(timepoint, levels = tp_levels))
+```
+
+### Plot settings
+
+```{r plot-settings, message=FALSE, warning=FALSE}
+my_scale <- scale_color_manual(
+  name   = "Treatment",
+  values = c("control" = "#0072B2", "heated" = "#D55E00"),
+  labels = c("Control", "Heated")
+)
+
+nut_theme <- theme_classic(base_size = 16) +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(face = "bold", size = 16),
+    axis.text  = element_text(size = 14, color = "black"),
+    axis.title.x = element_text(face = "bold", size = 16, color = "black"),
+    axis.title.y = element_text(face = "bold", size = 16, color = "black"),
+    legend.position = "none",
+    legend.title = element_blank(),
+    legend.text  = element_text(size = 14),
+    plot.title   = element_text(hjust = 0.5)
+  )
+
+x_scale <- scale_x_discrete(drop = FALSE)
+
+make_plot <- function(dat, y, se, ylab, ylim = NULL, xlab = NULL) {
+  
+  p <- ggplot(dat, aes(x = time_f, y = .data[[y]], color = treatment, group = treatment)) +
+    nut_theme +
+    geom_pointrange(
+      aes(ymin = .data[[y]] - .data[[se]], ymax = .data[[y]] + .data[[se]]),
+      position = position_dodge(width = 0.35),
+      na.rm = TRUE
+    ) +
+    geom_line(linewidth = 1, na.rm = TRUE) +
+    my_scale +
+    x_scale +
+    labs(x = xlab, y = ylab)
+  
+  if (!is.null(ylim)) {
+    p <- p + coord_cartesian(ylim = ylim)
+  }
+  
+  p
+}
+```
+
+### Individual plots
+
+```{r individual-plots, message=FALSE, warning=FALSE}
+px_chloride     <- make_plot(mdata.plot, "chloride_av", "chloride_se", "Chloride concentration", ylim = c(50, NA))
+px_nitrate      <- make_plot(mdata.plot, "nitrate_av", "nitrate_se", "Nitrate concentration")
+px_phosphate    <- make_plot(mdata.plot, "phosphate_av", "phosphate_se", "Phosphate concentration")
+px_sulfate      <- make_plot(mdata.plot, "sulfate_av", "sulfate_se", "Sulfate concentration")
+px_O2_pct       <- make_plot(mdata.plot, "O2_pourcentage_av", "O2_pourcentage_se", "O2 (%)")
+px_conductivity <- make_plot(mdata.plot, "conductivity_av", "conductivity_se", "Conductivity")
+px_pH           <- make_plot(mdata.plot, "pH_av", "pH_se", "pH")
+
+# Water temperature: more detailed y axis
+ymin_temp <- floor(min(mdata.plot$water_temp_av - mdata.plot$water_temp_se, na.rm = TRUE))
+ymax_temp <- ceiling(max(mdata.plot$water_temp_av + mdata.plot$water_temp_se, na.rm = TRUE))
+
+px_water_temp <- make_plot(mdata.plot, "water_temp_av", "water_temp_se", "Water temperature", xlab = "Weeks") +
+  scale_y_continuous(
+    breaks = seq(ymin_temp, ymax_temp, by = 2),
+    expand = c(0, 0)
+  )
+```
+
+
+### Statistical analyses
+
+```{r prepare-filtered-data, message=FALSE, warning=FALSE}
+# Prepare filtered data (exclude timepoints 0 and 1)
+num_cols_stats <- c("chloride", "nitrate", "phosphate", "sulfate",
+                    "O2_pourcentage", "water_temperature", "conductivity", "pH")
+
+df_filtered <- df2 %>% filter(!timepoint %in% c(0, 1)) %>% mutate(pond = factor(pond), block = factor(block))
+```
+
+#### Water temperature
+
+```{r stats-temperature, message=FALSE, warning=FALSE}
+model_temp <- lmer(water_temperature ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_temp, test = "F")
+summary(model_temp)
+```
+
+#### Chloride
+
+```{r stats-chloride, message=FALSE, warning=FALSE}
+model_chloride <- lmer(chloride ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_chloride, test = "F")
+summary(model_chloride)
+```
+
+#### Nitrate
+
+```{r stats-nitrate, message=FALSE, warning=FALSE}
+model_nitrate <- lmer(nitrate ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_nitrate, test = "F")
+summary(model_nitrate)
+```
+
+#### Phosphate
+
+```{r stats-phosphate, message=FALSE, warning=FALSE}
+model_phosphate <- lmer(phosphate ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_phosphate, test = "F")
+summary(model_phosphate)
+```
+
+#### Sulfate
+
+```{r stats-sulfate, message=FALSE, warning=FALSE}
+model_sulfate <- lmer(sulfate ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_sulfate, test = "F")
+summary(model_sulfate)
+```
+
+#### Dissolved oxygen
+
+```{r stats-oxygen, message=FALSE, warning=FALSE}
+model_O2 <- lmer(O2_pourcentage ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_O2, test = "F")
+summary(model_O2)
+```
+
+#### Conductivity
+
+```{r stats-conductivity, message=FALSE, warning=FALSE}
+model_cond <- lmer(conductivity ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_cond, test = "F")
+summary(model_cond)
+```
+
+#### pH
+
+```{r stats-ph, message=FALSE, warning=FALSE}
+model_ph <- lmer(pH ~ treatment * timepoint + (1 | pond) + (1 | block), data = df_filtered)
+Anova(model_ph, test = "F")
+summary(model_ph)
+```
