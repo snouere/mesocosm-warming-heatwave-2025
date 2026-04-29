@@ -1,0 +1,384 @@
+---
+title: "HOBO temperature and light analysis"
+---
+
+## Introduction
+
+This document analyses HOBO temperature logger data, examining daily maximum and mean temperatures, mean light across treatments and depths, including effect size calculations and outside logger data.
+
+**Note:** This R Markdown document generates:
+- Daily maximum temperature plots with heatwave period and snail sublethal thermal stress 
+- Effect size plots (Heated − Control) for daily mean and maximum temperatures 
+- Daily mean temperature and mean light plots including outside loggers 
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(plotrix)
+library(patchwork)
+```
+
+### Configuration
+
+```{r configuration, message=FALSE, warning=FALSE}
+# File paths
+temp_file  <- "hobo.xlsx"
+temp_sheet <- "All"
+tz_local   <- "Europe/Berlin"
+
+# Pond → treatment map
+pond_map <- tibble::tribble(
+  ~unit_id, ~treatment,
+  "1A","control","1B","heated",
+  "2A","control","2B","heated",
+  "3A","heated","3B","control",
+  "4A","heated","4B","control",
+  "5A","control","5B","heated",
+  "6A","control","6B","heated",
+  "7A","heated","7B","control",
+  "8A","heated","8B","control",
+  "9A","control","9B","heated",
+  "10A","control","10B","heated",
+  "11A","heated","11B","control",
+  "12A","heated","12B","control",
+  "13A","control","13B","heated",
+  "14A","control","14B","heated",
+  "15A","heated","15B","control",
+  "16A","heated","16B","control"
+)
+```
+
+### Plot settings
+
+```{r plot-settings, message=FALSE, warning=FALSE}
+theme_pub <- theme_classic(base_size = 15) +
+  theme(
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    strip.background = element_blank(),
+    legend.position = "top",
+    axis.text = element_text(color = "black"),
+    panel.spacing = grid::unit(0.35, "lines")
+  )
+
+cols <- c(control = "#0072B2", heated = "#D55E00")
+heatwave_col <- "#7E0000"
+```
+
+### Data import and processing
+
+```{r data-import, message=FALSE, warning=FALSE}
+raw <- read_excel(temp_file, sheet = temp_sheet, col_names = FALSE)
+
+h1 <- as.character(unlist(raw[1, ], use.names = FALSE))
+h2 <- as.character(unlist(raw[2, ], use.names = FALSE))
+h3 <- as.character(unlist(raw[3, ], use.names = FALSE))
+h4 <- as.character(unlist(raw[4, ], use.names = FALSE))
+h1[is.na(h1)] <- ""; h2[is.na(h2)] <- ""; h3[is.na(h3)] <- ""; h4[is.na(h4)] <- ""
+
+new_names <- str_replace_all(str_trim(paste(h1, h2, h3, h4, sep = "_")), "\\s+", "")
+new_names <- str_replace_all(new_names, "__+", "_")
+new_names[new_names == "___" | new_names == ""] <- paste0("V", which(new_names == "___" | new_names == ""))
+
+dat <- raw[-(1:4), ]
+names(dat) <- new_names
+
+if (ncol(dat) > 0 && all(grepl("^\\d+$", na.omit(as.character(dat[[1]]))))) {
+  dat <- dat[, -1]
+}
+```
+
+### Parse datetime
+
+```{r parse-datetime, message=FALSE, warning=FALSE}
+dt_name <- names(dat)[grepl("MM/TT/JJJ", names(dat), fixed = TRUE)][1]
+if (is.na(dt_name)) stop("Datetime column not found.")
+
+dat <- dat %>%
+  mutate(datetime = mdy_hms(.data[[dt_name]], quiet = TRUE)) %>%
+  filter(!is.na(datetime)) %>%
+  mutate(datetime = force_tz(datetime, tz_local))
+```
+
+### Process pond data
+
+```{r process-pond-data, message=FALSE, warning=FALSE}
+pond_cols <- names(dat)[
+  grepl("^[0-9]{1,2}[AB]_(0|65)_", names(dat)) &
+    grepl("_(Temperature|Light)$", names(dat))
+]
+if (length(pond_cols) == 0) stop("No pond columns detected.")
+
+pond_long <- dat %>%
+  select(datetime, all_of(pond_cols)) %>%
+  pivot_longer(-datetime, names_to = "sensor", values_to = "value") %>%
+  mutate(
+    unit_id  = str_match(sensor, "^([0-9]{1,2}[AB])_(0|65)_")[,2],
+    depth_cm = as.numeric(str_match(sensor, "^([0-9]{1,2}[AB])_(0|65)_")[,3]),
+    variable = tolower(str_match(sensor, "(Temperature|Light)$")[,2]),
+    value    = suppressWarnings(as.numeric(value))
+  ) %>%
+  filter(variable == "temperature") %>%
+  select(datetime, unit_id, depth_cm, value) %>%
+  left_join(pond_map, by = "unit_id") %>%
+  filter(!is.na(treatment))
+```
+
+### Process outside logger data
+
+```{r process-outside-data, message=FALSE, warning=FALSE}
+# Detect outside logger columns (Sun/Shade)
+outside_cols <- names(dat)[
+  grepl("^(Sun|Shade)_", names(dat)) &
+    grepl("_(Temperature|Light)$", names(dat))
+]
+
+outside_long <- NULL
+
+if (length(outside_cols) > 0) {
+  outside_long <- dat %>%
+    select(datetime, all_of(outside_cols)) %>%
+    pivot_longer(-datetime, names_to = "sensor", values_to = "value") %>%
+    mutate(
+      unit_id  = str_match(sensor, "^(Sun|Shade)_")[,2],
+      variable = tolower(str_match(sensor, "(Temperature|Light)$")[,2]),
+      value    = suppressWarnings(as.numeric(value))
+    ) %>%
+    filter(!is.na(unit_id), !is.na(variable)) %>%
+    select(datetime, unit_id, variable, value)
+}
+```
+
+### Daily summaries
+
+```{r daily-summaries, message=FALSE, warning=FALSE}
+# Daily summaries per pond
+daily_unit <- pond_long %>%
+  mutate(date = as.Date(datetime)) %>%
+  group_by(date, unit_id, depth_cm, treatment) %>%
+  summarise(
+    tmean = ifelse(all(is.na(value)), NA_real_, mean(value, na.rm = TRUE)),
+    tmax  = ifelse(all(is.na(value)), NA_real_, max(value, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+# Treatment daily means
+daily_trt <- daily_unit %>%
+  group_by(date, depth_cm, treatment) %>%
+  summarise(
+    tmean_av = mean(tmean, na.rm = TRUE),
+    tmean_se = plotrix::std.error(tmean, na.rm = TRUE),
+    tmax_av  = mean(tmax, na.rm = TRUE),
+    tmax_se  = plotrix::std.error(tmax, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Outside daily means
+outside_daily <- NULL
+
+if (!is.null(outside_long)) {
+  outside_daily <- outside_long %>%
+    filter(variable == "temperature") %>%
+    mutate(date = as.Date(datetime)) %>%
+    group_by(date, unit_id) %>%
+    summarise(temp = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    mutate(depth_cm = 0) %>%
+    filter(!is.na(temp))
+}
+```
+
+### Prepare plot elements
+
+```{r prepare-plot-elements, message=FALSE, warning=FALSE}
+snail_band <- tibble::tibble(
+  depth_cm = 65,
+  ymin = 28,
+  ymax = 30,
+  xmin = min(daily_trt$date, na.rm = TRUE),
+  xmax = max(daily_trt$date, na.rm = TRUE)
+)
+
+# heatwave 
+hw_start <- as.Date("2025-06-28")
+hw_end   <- as.Date("2025-07-02")
+
+ymax_by_depth <- daily_trt %>%
+  group_by(depth_cm) %>%
+  summarise(ymax = max(tmax_av, na.rm = TRUE), .groups = "drop")
+
+heatwave_rug <- tidyr::crossing(
+  depth_cm = sort(unique(daily_trt$depth_cm)),
+  xmin = hw_start,
+  xmax = hw_end + 1
+) %>%
+  left_join(ymax_by_depth, by = "depth_cm") %>%
+  mutate(
+    ymin = ymax - 0.6,
+    ymax = ymax
+  )
+```
+
+### Daily maximum temperature
+
+```{r fig-daily-max, message=FALSE, warning=FALSE, fig.width=3.42, fig.height=4.8}
+p_max <- ggplot() +
+  geom_rect(
+    data = heatwave_rug,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = heatwave_col,
+    alpha = 0.85
+  ) +
+  geom_rect(
+    data = snail_band,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = "grey70",
+    alpha = 0.12
+  ) +
+  geom_line(
+    data = daily_trt,
+    aes(x = date, y = tmax_av, color = treatment),
+    linewidth = 0.4
+  ) +
+  facet_wrap(
+    ~depth_cm, ncol = 1,
+    labeller = labeller(depth_cm = function(x) paste(x, "cm depth"))
+  ) +
+  scale_color_manual(values = cols) +
+  theme_pub +
+  labs(
+    x = "Date",
+    y = "Daily maximum temperature (°C)",
+    color = "Treatment"
+  )
+
+print(p_max)
+
+```
+
+### Figure: Daily mean temperature (with outside loggers)
+
+```{r fig-daily-mean, message=FALSE, warning=FALSE, fig.width=3.42, fig.height=4.8}
+pA <- ggplot(daily_trt, aes(date, tmean_av, color = treatment, fill = treatment)) +
+  geom_ribbon(
+    aes(ymin = tmean_av - tmean_se, ymax = tmean_av + tmean_se),
+    alpha = 0.25,
+    color = NA
+  ) +
+  geom_line(linewidth = 0.4, na.rm = TRUE) +
+  {if (!is.null(outside_daily)) 
+    geom_line(
+      data = outside_daily,
+      aes(x = date, y = temp, linetype = unit_id),
+      inherit.aes = FALSE,
+      color = "grey40",
+      linewidth = 0.5,
+      alpha = 0.9,
+      na.rm = TRUE
+    )
+  } +
+  scale_linetype_manual(
+    values = c(Sun = "dashed", Shade = "solid"),
+    labels = c("Air (sun)", "Air (shade)")
+  ) +
+  facet_wrap(
+    ~depth_cm,
+    ncol = 1,
+    labeller = labeller(depth_cm = function(x) paste(x, "cm depth"))
+  ) +
+  scale_color_manual(values = cols) +
+  scale_fill_manual(values = cols) +
+  labs(
+    y = "Daily mean temperature (°C)",
+    x = NULL,
+    color = "Treatment",
+    fill  = "Treatment",
+    linetype = "Outside logger"
+  ) +
+  theme_pub
+
+print(pA)
+```
+
+### Effect size: Daily maximum temperature
+
+```{r effect-size-max, message=FALSE, warning=FALSE, fig.width=3.42, fig.height=4.5}
+delta_tmax <- daily_trt %>%
+  select(date, depth_cm, treatment, tmax_av) %>%
+  pivot_wider(names_from = treatment, values_from = tmax_av) %>%
+  mutate(delta = heated - control) %>%
+  filter(is.finite(delta))
+
+med_vals <- delta_tmax %>%
+  group_by(depth_cm) %>%
+  summarise(med = median(delta, na.rm = TRUE), .groups = "drop")
+
+p_delta <- ggplot(delta_tmax, aes(delta)) +
+  geom_density(alpha = 0.35, fill = "firebrick") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_vline(data = med_vals, aes(xintercept = med), linewidth = 0.7) +
+  facet_wrap(
+    ~depth_cm, ncol = 1,
+    labeller = labeller(depth_cm = function(x) paste(x, "cm depth"))
+  ) +
+  theme_pub +
+  labs(
+    x = "Heated − Control daily maximum temperature (°C)",
+    y = "Density"
+  )
+
+print(p_delta)
+```
+
+### Effect size: Daily mean temperature
+
+```{r effect-size-mean, message=FALSE, warning=FALSE, fig.width=3.42, fig.height=4.5}
+delta_tmean <- daily_trt %>%
+  select(date, depth_cm, treatment, tmean_av) %>%
+  pivot_wider(names_from = treatment, values_from = tmean_av) %>%
+  mutate(delta = heated - control) %>%
+  filter(is.finite(delta))
+
+med_vals_mean <- delta_tmean %>%
+  group_by(depth_cm) %>%
+  summarise(med = median(delta, na.rm = TRUE), .groups = "drop")
+
+label_pos_mean <- delta_tmean %>%
+  group_by(depth_cm) %>%
+  summarise(y = max(density(delta)$y, na.rm = TRUE), .groups = "drop") %>%
+  left_join(med_vals_mean, by = "depth_cm") %>%
+  mutate(
+    label = paste0("Median ΔT = ", round(med, 2), " °C"),
+    y = y * 0.9
+  )
+
+p_delta_mean <- ggplot(delta_tmean, aes(delta)) +
+  geom_density(alpha = 0.35, fill = "firebrick") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_vline(data = med_vals_mean, aes(xintercept = med), linewidth = 0.7) +
+  geom_text(
+    data = label_pos_mean,
+    aes(x = med, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = -0.1,
+    size = 4
+  ) +
+  facet_wrap(
+    ~depth_cm, ncol = 1,
+    labeller = labeller(depth_cm = function(x) paste(x, "cm depth"))
+  ) +
+  theme_pub +
+  labs(
+    x = "Heated − Control daily mean temperature (°C)",
+    y = "Density"
+  )
+
+print(p_delta_mean)
+```
+
