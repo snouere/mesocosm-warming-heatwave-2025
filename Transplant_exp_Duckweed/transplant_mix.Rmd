@@ -1,0 +1,106 @@
+---
+title: "Evolved population: Relative growth rates"
+---
+
+## Introduction
+
+This document analyses the mixed population experiment (transplant experiment) examining relative growth rates (based on frond counts) across different origin treatments and host environments.
+
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(car)
+library(plotrix)
+library(ggpubr)
+```
+
+### Data import
+
+```{r data-import, message=FALSE, warning=FALSE}
+df <- read.table("data_mix.txt", sep = "\t", header = TRUE)
+```
+
+### Data preparation
+
+```{r data-preparation, message=FALSE, warning=FALSE}
+df$count_D0 <- as.numeric(df$count_D0)
+df$count_w2 <- as.numeric(df$count_w2)
+
+df$rel.count <- (log(df$count_w2) - log(df$count_D0)) / 14
+```
+
+### Summary statistics
+
+```{r summary-statistics, message=FALSE, warning=FALSE}
+mdata.plot <- df %>%
+  group_by(origin_treatment, host_environment) %>%
+  summarise(
+    fitness_av = mean(rel.count, na.rm = TRUE),
+    fitness_se = std.error(rel.count, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+### Relative growth rate (count)
+
+```{r panel-a-count, message=FALSE, warning=FALSE, fig.width=6, fig.height=6}
+px1 <- ggplot(mdata.plot, aes(
+  x = host_environment, 
+  y = fitness_av,
+  color = origin_treatment,
+  linetype = origin_treatment,
+  group = origin_treatment
+)) +
+  geom_errorbar(
+    aes(ymin = fitness_av - fitness_se, ymax = fitness_av + fitness_se),
+    width = 0.15, linewidth = 0.9,
+    position = position_dodge(0.4)
+  ) +
+  geom_point(
+    position = position_dodge(0.4),
+    size = 3
+  ) +
+  geom_line(
+    position = position_dodge(0.4),
+    linewidth = 1
+  ) +
+  scale_color_manual(
+    name = "Origin Treatment",
+    values = c("control" = "#0072B2", "heated" = "#D55E00")
+  ) +
+  scale_linetype_manual(     
+    name = "Origin Treatment",
+    values = c("control" = "dashed", "heated" = "solid")
+  ) +
+  labs(
+    title = "Relative growth rate in frond counts",
+    x = "Host Environment",
+    y = "Relative Growth Rate"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    axis.title = element_text(face = "bold", size = 16),
+    axis.text = element_text(size = 13),
+    legend.position = "top",
+    legend.title = element_text(face = "bold", size = 14),
+    legend.text = element_text(size = 13),
+    panel.grid = element_blank()
+  )
+
+px1
+```
+### Statistical analyses
+
+#### Relative growth rate (count)
+
+```{r stats-count, message=FALSE, warning=FALSE}
+model_count <- lmer(rel.count ~ origin_treatment * host_environment + (1 | pond) + (1 | block), data = df)
+Anova(model_count, test = "F")
+summary(model_count)
+```
