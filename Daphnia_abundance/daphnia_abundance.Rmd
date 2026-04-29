@@ -1,0 +1,140 @@
+---
+title: "Daphnia abundance analysis"
+---
+
+## Introduction
+
+This document analyses Daphnia abundance under different treatments over time.
+
+### Load libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(plotrix)  
+library(lme4)
+library(car)
+library(readr)
+library(ggpubr)
+library(readxl)
+library(tidyr)
+```
+
+### Data import
+
+```{r data-import, message=FALSE, warning=FALSE}
+df <- read.table("data_count_daphnia.txt", sep = "\t", header = TRUE)
+```
+
+### Data cleaning
+
+```{r data-cleaning, message=FALSE, warning=FALSE}
+df_daph <- df %>%
+  rename(daph_count = `number_daphnia`) %>%
+  mutate(
+    timepoint = as.numeric(timepoint),
+    daph_count = as.numeric(daph_count) / 9,
+    treatment = factor(treatment, levels = c("control", "heated"))
+  )
+```
+
+### Summary statistics
+
+```{r summary-statistics, message=FALSE, warning=FALSE}
+daph_sum_trt <- df_daph %>%
+  filter(!is.na(timepoint), treatment %in% c("control", "heated")) %>%
+  group_by(timepoint, treatment) %>%
+  summarise(
+    n      = sum(!is.na(daph_count)),
+    daph_av = mean(daph_count, na.rm = TRUE),
+    daph_se = plotrix::std.error(daph_count, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+daph_ref0 <- df_daph %>%
+  filter(timepoint == 0) %>%
+  summarise(
+    timepoint = 0,
+    treatment = factor("ref", levels = c("ref", "control", "heated")),
+    n       = sum(!is.na(daph_count)),
+    daph_av = mean(daph_count, na.rm = TRUE),
+    daph_se = plotrix::std.error(daph_count, na.rm = TRUE)
+  )
+```
+
+### Prepare plot data
+
+```{r prepare-plot-data, message=FALSE, warning=FALSE}
+ref_for_lines <- daph_ref0 %>%
+  select(timepoint, daph_av, daph_se) %>%
+  crossing(
+    treatment = factor(c("control", "heated"), levels = c("ref", "control", "heated"))
+  )
+
+line_df <- bind_rows(
+  ref_for_lines,
+  daph_sum_trt %>% mutate(treatment = factor(treatment, levels = c("ref","control","heated")))
+)
+
+point_df <- bind_rows(
+  daph_ref0,
+  daph_sum_trt %>% mutate(treatment = factor(treatment, levels = c("ref","control","heated")))
+)
+
+time_levels <- sort(unique(point_df$timepoint))
+line_df  <- line_df  %>% mutate(time_f = factor(timepoint, levels = time_levels))
+point_df <- point_df %>% mutate(time_f = factor(timepoint, levels = time_levels))
+```
+
+### Daphnia abundance plot
+
+```{r daphnia-plot, message=FALSE, warning=FALSE, fig.width=6.3, fig.height=4.7}
+px_daphnia <- ggplot() +
+  geom_line(
+    data = line_df,
+    aes(x = time_f, y = daph_av, group = treatment, color = treatment),
+    linewidth = 1,
+    na.rm = TRUE
+  ) +
+  # error bars
+  geom_errorbar(
+    data = point_df,
+    aes(x = time_f, y = daph_av, ymin = daph_av - daph_se, ymax = daph_av + daph_se, color = treatment),
+    width = 0, linewidth = 0.8,
+    na.rm = TRUE
+  ) +
+  # points
+  geom_point(
+    data = point_df,
+    aes(x = time_f, y = daph_av, color = treatment),
+    size = 3,
+    na.rm = TRUE
+  ) +
+  scale_color_manual(
+    values = c("ref" = "#4D4D4D", "control" = "#0072B2", "heated" = "#D55E00")
+  ) +
+  labs(
+    x = "Time (weeks)",
+    y = "Daphnia abundance (count L⁻¹)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(face = "bold", size = 14),
+    axis.text  = element_text(size = 14),
+    legend.position = "none",
+    legend.title = element_blank(),
+    legend.text  = element_text(size = 14)
+  )
+
+px_daphnia
+```
+
+### Statistical analysis
+
+```{r statistical-analysis, message=FALSE, warning=FALSE}
+m_daph <- lmer(daph_count ~ treatment * timepoint + (1|pond) + (1|block), data = df_daph %>% filter(timepoint != 0))
+Anova(m_daph, test = "F")
+summary(m_daph)
+```
